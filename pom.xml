@@ -270,7 +270,12 @@
                             <skip>true</skip>
                         </configuration>
                     </plugin>
-                </plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-scm-plugin</artifactId>
+						<version>1.11.1</version>
+					</plugin>
+				</plugins>
             </build>
         </profile>
     </profiles>
