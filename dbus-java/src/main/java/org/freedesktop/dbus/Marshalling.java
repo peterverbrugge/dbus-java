@@ -470,7 +470,9 @@ public final class Marshalling {
                 System.arraycopy(newparams, 0, exparams, i, newparams.length);
                 System.arraycopy(_parameters, i + 1, exparams, i + newparams.length, _parameters.length - i - 1);
                 _parameters = exparams;
-                LOGGER.trace("New params: {}, new types: {}", Arrays.deepToString(_parameters), Arrays.deepToString(_types));
+                if (LOGGER.isTraceEnabled()) {
+                    LOGGER.trace("New params: {}, new types: {}", Arrays.deepToString(_parameters), Arrays.deepToString(_types));
+                }
                 i--;
             } else if (_types[i] instanceof TypeVariable && !(_parameters[i] instanceof Variant)) {
                 // its an unwrapped variant, wrap it
@@ -484,7 +486,9 @@ public final class Marshalling {
 
     @SuppressWarnings("unchecked")
     static Object deSerializeParameter(Object _parameter, Type _type, AbstractConnection _conn) throws Exception {
-        LOGGER.trace("Deserializing from {} to {}", _parameter.getClass(), _type.getClass());
+        if (LOGGER.isTraceEnabled()) {
+            LOGGER.trace("Deserializing from {} to {}", _parameter.getClass(), _type.getClass());
+        }
 
         // its a wrapped variant, unwrap it
         if (_type instanceof TypeVariable && _parameter instanceof Variant) {
@@ -629,7 +633,9 @@ public final class Marshalling {
 
     @SuppressWarnings("unchecked")
     public static Object[] deSerializeParameters(Object[] _parameters, Type[] _types, AbstractConnection _conn) throws Exception {
-        LOGGER.trace("Deserializing from {} to {} ", Arrays.deepToString(_parameters), Arrays.deepToString(_types));
+        if (LOGGER.isTraceEnabled()) {
+            LOGGER.trace("Deserializing from {} to {} ", Arrays.deepToString(_parameters), Arrays.deepToString(_types));
+        }
         if (null == _parameters) {
             return null;
         }
