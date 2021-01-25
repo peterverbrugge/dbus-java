@@ -181,7 +181,9 @@ public class Message {
         bytecounter = _msg.length + _headers.length + _body.length;
         filedescriptors = descriptors;
 
-        logger.trace("Message header: {}", Hexdump.toAscii(_headers));
+        if (logger.isTraceEnabled()) {
+            logger.trace("Message header: {}", Hexdump.toAscii(_headers));
+        }
         Object[] hs = extract("a(yv)", _headers, 0);
         
         LoggingHelper.arraysDeepString(logger.isTraceEnabled(), hs);
@@ -389,7 +391,9 @@ public class Message {
             marshallintLittle(l, buf, ofs, width);
         }
 
-        logger.trace("Marshalled int {} to {}", l, Hexdump.toHex(buf, ofs, width));
+        if (logger.isTraceEnabled()) {
+            logger.trace("Marshalled int {} to {}", l, Hexdump.toHex(buf, ofs, width));
+        }
     }
 
     /**
@@ -845,7 +849,10 @@ public class Message {
      * @throws DBusException on error
      */
     public void append(String sig, Object... data) throws DBusException {
-        logger.debug("Appending sig: {} data: {}", sig, LoggingHelper.arraysDeepString(logger.isDebugEnabled(),data));
+        if (logger.isDebugEnabled()) { 
+            logger.debug("Appending sig: {} data: {}", sig, LoggingHelper.arraysDeepString(logger.isDebugEnabled(),data));
+        }
+
         byte[] sigb = sig.getBytes();
         int j = 0;
         for (int i = 0; i < sigb.length; i++) {

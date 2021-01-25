@@ -41,8 +41,8 @@ public class OutputStreamMessageWriter implements IMessageWriter {
         }
 
         for (byte[] buf : m.getWireData()) {
-            if(logger.isTraceEnabled()) {
-                logger.trace("{}", null == buf ? "" : Hexdump.format(buf));
+            if (logger.isTraceEnabled()) {
+                logger.trace("({}):{}", buf, (null == buf ? "" : Hexdump.format(buf)));
             }
             if (null == buf) {
                 break;

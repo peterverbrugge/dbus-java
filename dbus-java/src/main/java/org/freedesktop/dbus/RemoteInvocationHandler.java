@@ -55,7 +55,9 @@ public class RemoteInvocationHandler implements InvocationHandler {
             }
         } else {
             try {
-                LOGGER.trace("Converting return parameters from {} to type {}",LoggingHelper.arraysDeepString(LOGGER.isTraceEnabled(), rp), m.getGenericReturnType());
+                if (LOGGER.isTraceEnabled()) {
+                    LOGGER.trace("Converting return parameters from {} to type {}",LoggingHelper.arraysDeepString(LOGGER.isTraceEnabled(), rp), m.getGenericReturnType());
+                }
                 rp = Marshalling.deSerializeParameters(rp, new Type[] {
                         m.getGenericReturnType()
                 }, conn);

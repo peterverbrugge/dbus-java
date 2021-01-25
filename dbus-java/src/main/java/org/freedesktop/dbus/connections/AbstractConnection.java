@@ -793,7 +793,11 @@ public abstract class AbstractConnection implements Closeable {
                 try {
                     Type[] ts = me.getGenericParameterTypes();
                     m.setArgs(Marshalling.deSerializeParameters(m.getParameters(), ts, conn));
-                    logger.trace("Deserialised {} to types {}", LoggingHelper.arraysDeepString(logger.isTraceEnabled(), m.getParameters()), LoggingHelper.arraysDeepString(logger.isTraceEnabled(),ts));
+
+                    if (logger.isTraceEnabled()) {
+                        logger.trace("Deserialised {} to types {}", LoggingHelper.arraysDeepString(logger.isTraceEnabled(), m.getParameters()), LoggingHelper.arraysDeepString(logger.isTraceEnabled(),ts));
+                    }
+
                 } catch (Exception e) {
                     logger.debug("", e);
                     handleException(conn, m, new UnknownMethod("Failure in de-serializing message: " + e));
@@ -804,7 +808,9 @@ public abstract class AbstractConnection implements Closeable {
                     INFOMAP.put(Thread.currentThread(), info);
                     Object result;
                     try {
-                        logger.trace("Invoking Method: {} on {} with parameters {}", me, ob, Arrays.deepToString(m.getParameters()));
+                        if (logger.isTraceEnabled()) {
+                            logger.trace("Invoking Method: {} on {} with parameters {}", me, ob, Arrays.deepToString(m.getParameters()));
+                        }
                         result = me.invoke(ob, m.getParameters());
                     } catch (InvocationTargetException ite) {
                         logger.debug(ite.getMessage(), ite);

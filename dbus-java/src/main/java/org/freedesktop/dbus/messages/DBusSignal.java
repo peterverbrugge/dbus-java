@@ -237,6 +237,11 @@ public class DBusSignal extends Message {
                 Object[] params = new Object[args.length + 1];
                 params[0] = getPath();
                 System.arraycopy(args, 0, params, 1, args.length);
+
+                if (logger.isDebugEnabled()) { 
+                    logger.debug("Creating signal of type {} with parameters {}", clazz, Arrays.deepToString(params));
+                }
+
                 s = con.newInstance(params);
             }
             s.getHeaders().putAll(getHeaders());
