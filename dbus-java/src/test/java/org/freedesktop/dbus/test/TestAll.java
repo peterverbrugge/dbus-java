@@ -114,7 +114,7 @@ public class TestAll {
     }
 
     @AfterEach
-    public void tearDown() {
+    public void tearDown() throws Exception {
         System.out.println("Checking for outstanding errors");
         DBusExecutionException dbee = serverconn.getError();
         if (null != dbee) {
@@ -128,6 +128,7 @@ public class TestAll {
         System.out.println("Disconnecting");
         /** Disconnect from the bus. */
         clientconn.disconnect();
+        serverconn.releaseBusName("foo.bar.Test");
         serverconn.disconnect();
     }
 
@@ -216,6 +217,26 @@ public class TestAll {
 
         DBusSignal signalToSend =
                 new DBusSignal(null, "/", "org.foo", "methodarg", "us", new UInt32(42), "SampleString");
+
+        serverconn.sendMessage(signalToSend);
+
+        // wait some time to receive signals
+        Thread.sleep(1000L);
+
+        genericDecode.incomingSameAsExpected();
+
+        clientconn.removeGenericSigHandler(signalRule, genericDecode);
+    }
+
+    @Test
+    public void testGenericHandlerWithNoInterface() throws DBusException, InterruptedException {
+        GenericHandlerWithDecode genericDecode = new GenericHandlerWithDecode(new UInt32(42), "SampleString");
+        DBusMatchRule signalRule = new DBusMatchRule("signal", null, "methodargNoIface", "/");
+
+        clientconn.addGenericSigHandler(signalRule, genericDecode);
+
+        DBusSignal signalToSend =
+                new DBusSignal(null, "/", "org.foo", "methodargNoIface", "us", new UInt32(42), "SampleString");
 
         serverconn.sendMessage(signalToSend);
 
@@ -398,7 +419,7 @@ public class TestAll {
         assertEquals(elem2.getValue1(), out[1][0]);
         assertEquals(elem2.getValue2(), out[1][1]);
     }
-    
+
     public void testFrob() throws DBusException {
         SampleRemoteInterface tri = (SampleRemoteInterface) clientconn.getPeerRemoteObject("foo.bar.Test", TEST_OBJECT_PATH);
         System.out.println("frobnicating");
@@ -558,7 +579,7 @@ public class TestAll {
         System.out.println("Doing stuff asynchronously");
         @SuppressWarnings("unchecked")
         DBusAsyncReply<Boolean> stuffreply = (DBusAsyncReply<Boolean>) clientconn.callMethodAsync(tri2, "dostuff",
-                new SampleStruct("bar", new UInt32(52), new Variant<>(new Boolean(true))));
+                new SampleStruct("bar", new UInt32(52), new Variant<>(Boolean.TRUE)));
 
         // wait a bit to allow the async call to complete
         Thread.sleep(500L);

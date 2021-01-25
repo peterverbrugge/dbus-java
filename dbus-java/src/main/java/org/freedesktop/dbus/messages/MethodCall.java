@@ -16,8 +16,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.freedesktop.Hexdump;
+import org.freedesktop.dbus.FileDescriptor;
+import org.freedesktop.dbus.connections.impl.DBusConnection;
 import org.freedesktop.dbus.exceptions.DBusException;
 import org.freedesktop.dbus.exceptions.MessageFormatException;
+import org.freedesktop.dbus.types.UInt32;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,7 +36,7 @@ public class MethodCall extends Message {
     }
 
     public MethodCall(String source, String dest, String path, String iface, String member, byte flags, String sig, Object... args) throws DBusException {
-        super(Message.Endian.BIG, Message.MessageType.METHOD_CALL, flags);
+        super(DBusConnection.getEndianness(), Message.MessageType.METHOD_CALL, flags);
 
         if (null == member || null == path) {
             throw new MessageFormatException("Must specify destination, path and function name to MethodCalls.");
@@ -93,6 +96,24 @@ public class MethodCall extends Message {
             setArgs(args);
         }
 
+        int totalFileDes = 0;
+        if( args != null ){
+            for( int x = 0; x < args.length; x++ ){
+                if( args[x] instanceof FileDescriptor ){
+                    totalFileDes++;
+                }
+            }
+        }
+
+        if( totalFileDes > 0 ){
+            getHeaders().put(Message.HeaderField.UNIX_FDS, totalFileDes);
+            hargs.add(new Object[]{
+                    Message.HeaderField.UNIX_FDS, new Object[]{
+                    ArgumentType.UINT32_STRING, new UInt32( totalFileDes )
+                }
+            });
+        }
+
         byte[] blen = new byte[4];
         appendBytes(blen);
         append("ua(yv)", getSerial(), hargs.toArray());
@@ -107,7 +128,7 @@ public class MethodCall extends Message {
         logger.debug("marshalled size ({}): {}",blen, Hexdump.format(blen));
     }
 
-    private static long REPLY_WAIT_TIMEOUT = 20000;
+    private static long REPLY_WAIT_TIMEOUT = 200000;
 
     /**
     * Set the default timeout for method calls.

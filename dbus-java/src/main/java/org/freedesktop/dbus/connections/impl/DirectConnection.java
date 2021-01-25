@@ -21,7 +21,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Queue;
 import java.util.Random;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import org.freedesktop.Hexdump;
 import org.freedesktop.dbus.DBusMatchRule;
@@ -29,6 +31,7 @@ import org.freedesktop.dbus.RemoteInvocationHandler;
 import org.freedesktop.dbus.RemoteObject;
 import org.freedesktop.dbus.SignalTuple;
 import org.freedesktop.dbus.connections.AbstractConnection;
+import org.freedesktop.dbus.connections.FreeBSDHelper;
 import org.freedesktop.dbus.connections.transports.TransportFactory;
 import org.freedesktop.dbus.exceptions.DBusException;
 import org.freedesktop.dbus.interfaces.DBusInterface;
@@ -56,7 +59,7 @@ public class DirectConnection extends AbstractConnection {
      * @throws DBusException on error
      */
     public DirectConnection(String address) throws DBusException {
-        this(address, AbstractConnection.TIMEOUT);
+        this(address, AbstractConnection.TCP_CONNECT_TIMEOUT);
     }
     
     /**
@@ -136,7 +139,11 @@ public class DirectConnection extends AbstractConnection {
             path = path.replaceAll("..........$", sb.toString());
             LoggerFactory.getLogger(DirectConnection.class).trace("Trying path {}", path);
         } while ((new File(path)).exists());
-        address += "abstract=" + path;
+        if (FreeBSDHelper.isFreeBSD()) {
+            address += "path=" + path;
+        } else {
+            address += "abstract=" + path;
+        }
         address += ",guid=" + TransportFactory.genGUID();
         LoggerFactory.getLogger(DirectConnection.class).debug("Created Session address: {}", address);
         return address;
@@ -223,7 +230,7 @@ public class DirectConnection extends AbstractConnection {
             throw new DBusException("Invalid object path: null");
         }
 
-        if (!objectpath.matches(OBJECT_REGEX) || objectpath.length() > MAX_NAME_LENGTH) {
+        if (objectpath.length() > MAX_NAME_LENGTH || !OBJECT_REGEX_PATTERN.matcher(objectpath).matches()) {
             throw new DBusException("Invalid object path: " + objectpath);
         }
 
@@ -251,7 +258,7 @@ public class DirectConnection extends AbstractConnection {
             throw new ClassCastException("Not A DBus Interface");
         }
 
-        if (!objectpath.matches(OBJECT_REGEX) || objectpath.length() > MAX_NAME_LENGTH) {
+        if (objectpath.length() > MAX_NAME_LENGTH || !OBJECT_REGEX_PATTERN.matcher(objectpath).matches()) {
             throw new DBusException("Invalid object path: " + objectpath);
         }
 
@@ -279,13 +286,11 @@ public class DirectConnection extends AbstractConnection {
     @Override
     protected <T extends DBusSignal> void removeSigHandler(DBusMatchRule rule, DBusSigHandler<T> handler) throws DBusException {
         SignalTuple key = new SignalTuple(rule.getInterface(), rule.getMember(), rule.getObject(), rule.getSource());
-        synchronized (getHandledSignals()) {
-            List<DBusSigHandler<? extends DBusSignal>> v = getHandledSignals().get(key);
-            if (null != v) {
-                v.remove(handler);
-                if (0 == v.size()) {
-                    getHandledSignals().remove(key);
-                }
+        Queue<DBusSigHandler<? extends DBusSignal>> v = getHandledSignals().get(key);
+        if (null != v) {
+            v.remove(handler);
+            if (0 == v.size()) {
+                getHandledSignals().remove(key);
             }
         }
     }
@@ -293,28 +298,24 @@ public class DirectConnection extends AbstractConnection {
     @Override
     protected <T extends DBusSignal> void addSigHandler(DBusMatchRule rule, DBusSigHandler<T> handler) throws DBusException {
         SignalTuple key = new SignalTuple(rule.getInterface(), rule.getMember(), rule.getObject(), rule.getSource());
-        synchronized (getHandledSignals()) {
-            List<DBusSigHandler<? extends DBusSignal>> v = getHandledSignals().get(key);
-            if (null == v) {
-                v = new ArrayList<>();
-                v.add(handler);
-                getHandledSignals().put(key, v);
-            } else {
-                v.add(handler);
-            }
-        }
+       
+        Queue<DBusSigHandler<? extends DBusSignal>> v = 
+                getHandledSignals().computeIfAbsent(key, val -> {
+                    Queue<DBusSigHandler<? extends DBusSignal>> l = new ConcurrentLinkedQueue<>();
+                    return l;
+                });
+    
+        v.add(handler);
     }
 
     @Override
     protected void removeGenericSigHandler(DBusMatchRule rule, DBusSigHandler<DBusSignal> handler) throws DBusException {
         SignalTuple key = new SignalTuple(rule.getInterface(), rule.getMember(), rule.getObject(), rule.getSource());
-        synchronized (getGenericHandledSignals()) {
-            List<DBusSigHandler<DBusSignal>> v = getGenericHandledSignals().get(key);
-            if (null != v) {
-                v.remove(handler);
-                if (0 == v.size()) {
-                    getGenericHandledSignals().remove(key);
-                }
+        Queue<DBusSigHandler<DBusSignal>> v = getGenericHandledSignals().get(key);
+        if (null != v) {
+            v.remove(handler);
+            if (0 == v.size()) {
+                getGenericHandledSignals().remove(key);
             }
         }
     }
@@ -322,16 +323,13 @@ public class DirectConnection extends AbstractConnection {
     @Override
     protected void addGenericSigHandler(DBusMatchRule rule, DBusSigHandler<DBusSignal> handler) throws DBusException {
         SignalTuple key = new SignalTuple(rule.getInterface(), rule.getMember(), rule.getObject(), rule.getSource());
-        synchronized (getGenericHandledSignals()) {
-            List<DBusSigHandler<DBusSignal>> v = getGenericHandledSignals().get(key);
-            if (null == v) {
-                v = new ArrayList<>();
-                v.add(handler);
-                getGenericHandledSignals().put(key, v);
-            } else {
-                v.add(handler);
-            }
-        }
+        Queue<DBusSigHandler<DBusSignal>> v = 
+                getGenericHandledSignals().computeIfAbsent(key, val -> {
+                    Queue<DBusSigHandler<DBusSignal>> l = new ConcurrentLinkedQueue<>();
+                    return l;
+                });
+
+        v.add(handler);
     }
 
     @Override

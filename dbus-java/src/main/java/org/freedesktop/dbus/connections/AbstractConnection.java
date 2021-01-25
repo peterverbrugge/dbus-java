@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Type;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -33,7 +34,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.regex.Pattern;
 
 import org.freedesktop.dbus.DBusAsyncReply;
@@ -63,6 +67,7 @@ import org.freedesktop.dbus.messages.Message;
 import org.freedesktop.dbus.messages.MethodCall;
 import org.freedesktop.dbus.messages.MethodReturn;
 import org.freedesktop.dbus.messages.ObjectTree;
+import org.freedesktop.dbus.utils.LoggingHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -73,57 +78,62 @@ import com.github.hypfvieh.threads.NameableThreadFactory;
  */
 public abstract class AbstractConnection implements Closeable {
 
-    private static final Map<Thread, DBusCallInfo> INFOMAP     = new ConcurrentHashMap<>();
+    private static final Map<Thread, DBusCallInfo> INFOMAP   = new ConcurrentHashMap<>();
     /**
      * Default thread pool size
      */
     private static final int         THREADCOUNT = 4;
     /**
-     * Timeout in µs on checking the BUS for incoming messages and sending outgoing messages
+     * Connect timeout, used for TCP only
      */
-    protected static final int                       TIMEOUT     = 100000;
+    public static final int          TCP_CONNECT_TIMEOUT     = 100000;
 
-    public static final boolean      FLOAT_SUPPORT    =    (null != System.getenv("DBUS_JAVA_FLOATS"));
-    public static final String       BUSNAME_REGEX    = "^[-_a-zA-Z][-_a-zA-Z0-9]*(\\.[-_a-zA-Z][-_a-zA-Z0-9]*)*$";
-    public static final String       CONNID_REGEX     = "^:[0-9]*\\.[0-9]*$";
-    public static final String       OBJECT_REGEX     = "^/([-_a-zA-Z0-9]+(/[-_a-zA-Z0-9]+)*)?$";
-    public static final Pattern      DOLLAR_PATTERN   = Pattern.compile("[$]");
+    /** Lame method to setup endianness used on DBus messages */
+    private static byte              endianness             = getSystemEndianness();
 
-    public static final int          MAX_ARRAY_LENGTH = 67108864;
-    public static final int          MAX_NAME_LENGTH  = 255;
+    public static final boolean      FLOAT_SUPPORT          = (null != System.getenv("DBUS_JAVA_FLOATS"));
+    public static final Pattern      BUSNAME_REGEX          = Pattern.compile("^[-_a-zA-Z][-_a-zA-Z0-9]*(\\.[-_a-zA-Z][-_a-zA-Z0-9]*)*$");
+    public static final Pattern      CONNID_REGEX           = Pattern.compile("^:[0-9]*\\.[0-9]*$");
+    public static final Pattern      OBJECT_REGEX_PATTERN   = Pattern.compile("^/([-_a-zA-Z0-9]+(/[-_a-zA-Z0-9]+)*)?$");
+    public static final Pattern      DOLLAR_PATTERN         = Pattern.compile("[$]");
 
-    private final Logger        logger = LoggerFactory.getLogger(getClass());
+    public static final int          MAX_ARRAY_LENGTH       = 67108864;
+    public static final int          MAX_NAME_LENGTH        = 255;
 
-    private final ObjectTree                                                   objectTree;
+    private final Logger                                                        logger;
 
-    private final Map<String, ExportedObject>                                  exportedObjects;
-    private final Map<DBusInterface, RemoteObject>                             importedObjects;
+    private final ObjectTree                                                    objectTree;
 
-    private final PendingCallbackManager                                       callbackManager;
+    private final Map<String, ExportedObject>                                   exportedObjects;
+    private final Map<DBusInterface, RemoteObject>                              importedObjects;
 
-    private final FallbackContainer                                            fallbackContainer;
+    private final PendingCallbackManager                                        callbackManager;
 
-    private final Queue<Error>                                                 pendingErrorQueue;
+    private final FallbackContainer                                             fallbackContainer;
 
-    private final Map<SignalTuple, List<DBusSigHandler<? extends DBusSignal>>> handledSignals;
-    private final Map<SignalTuple, List<DBusSigHandler<DBusSignal>>>           genericHandledSignals;
-    private final Map<Long, MethodCall>                                        pendingCalls;
+    private final Queue<Error>                                                  pendingErrorQueue;
 
-    private final IncomingMessageThread                                        readerThread;
-    //private final SenderThread                                                 senderThread;
+    private final Map<SignalTuple, Queue<DBusSigHandler<? extends DBusSignal>>> handledSignals;
+    private final Map<SignalTuple, Queue<DBusSigHandler<DBusSignal>>>           genericHandledSignals;
+    private final Map<Long, MethodCall>                                         pendingCalls;
 
-    private final BusAddress                                                   busAddress;
+    private final IncomingMessageThread                                         readerThread;
+    // private final SenderThread senderThread;
 
-    private volatile boolean                                                   run;
+    private final BusAddress                                                    busAddress;
 
-    private boolean                                                            weakreferences   = false;
-    private boolean                                                            connected        = false;
+    private final ExecutorService                                               senderService;
 
-    private AbstractTransport                                                  transport;
-    private ExecutorService                                                    workerThreadPool;
-    private ExecutorService                                                    senderService;
-    
+    private boolean                                                             weakreferences       = false;
+    private volatile boolean                                                    connected            = false;
+
+    private AbstractTransport                                                   transport;
+    private volatile ThreadPoolExecutor                                         workerThreadPool;
+    private final ReadWriteLock                                                 workerThreadPoolLock =
+            new ReentrantReadWriteLock();
+
     protected AbstractConnection(String address, int timeout) throws DBusException {
+        logger = LoggerFactory.getLogger(getClass());
         exportedObjects = new HashMap<>();
         importedObjects = new ConcurrentHashMap<>();
 
@@ -135,8 +145,8 @@ public abstract class AbstractConnection implements Closeable {
         callbackManager = new PendingCallbackManager();
 
         pendingErrorQueue = new ConcurrentLinkedQueue<>();
-        workerThreadPool =
-                Executors.newFixedThreadPool(THREADCOUNT, new NameableThreadFactory("DBus Worker Thread-", false));
+        workerThreadPool = (ThreadPoolExecutor) Executors.newFixedThreadPool(THREADCOUNT,
+                        new NameableThreadFactory("DBus Worker Thread-", false));
 
         senderService =
                 Executors.newFixedThreadPool(1, new NameableThreadFactory("DBus Sender Thread-", false));
@@ -150,25 +160,63 @@ public abstract class AbstractConnection implements Closeable {
             busAddress = new BusAddress(address);
             transport = TransportFactory.createTransport(busAddress, timeout);
             connected = true;
-        } catch (IOException | DBusException ioe) {
-            logger.debug("Error creating transport", ioe);
+        } catch (IOException | DBusException _ex) {
+            logger.debug("Error creating transport", _ex);
             disconnect();
-            throw new DBusException("Failed to connect to bus: " + ioe.getMessage(), ioe);
+            throw new DBusException("Failed to connect to bus: " + _ex.getMessage(), _ex);
         }
-        run = true;
-
     }
 
     public abstract DBusInterface getExportedObject(String source, String path) throws DBusException;
 
-    protected abstract <T extends DBusSignal> void removeSigHandler(DBusMatchRule rule, DBusSigHandler<T> handler) throws DBusException;
+    /**
+     * Remove a match rule with the given {@link DBusSigHandler}.
+     * The rule will only be removed from DBus if no other additional handlers are registered to the same rule.
+     *
+     * @param _rule rule to remove
+     * @param _handler handler to remove
+     * @throws DBusException on error
+     */
+    protected abstract <T extends DBusSignal> void removeSigHandler(DBusMatchRule _rule, DBusSigHandler<T> _handler) throws DBusException;
 
-    protected abstract <T extends DBusSignal> void addSigHandler(DBusMatchRule rule, DBusSigHandler<T> handler) throws DBusException;
+    /**
+     * Add a signal handler with the given {@link DBusMatchRule} to DBus.
+     * The rule will be added to DBus if it was not added before.
+     * If the rule was already added, the signal handler is added to the internal map receiving
+     * the same signal as the first (and additional) handlers for this rule.
+     *
+     * @param _rule rule to add
+     * @param _handler handler to use
+     * @throws DBusException on error
+     */
+    protected abstract <T extends DBusSignal> void addSigHandler(DBusMatchRule _rule, DBusSigHandler<T> _handler) throws DBusException;
 
-    protected abstract void removeGenericSigHandler(DBusMatchRule rule, DBusSigHandler<DBusSignal> handler) throws DBusException;
+    /**
+     * Remove a generic signal handler with the given {@link DBusMatchRule}.
+     * The rule will only be removed from DBus if no other additional handlers are registered to the same rule.
+     *
+     * @param _rule rule to remove
+     * @param _handler handler to remove
+     * @throws DBusException on error
+     */
+    protected abstract void removeGenericSigHandler(DBusMatchRule _rule, DBusSigHandler<DBusSignal> _handler) throws DBusException;
 
-    protected abstract void addGenericSigHandler(DBusMatchRule rule, DBusSigHandler<DBusSignal> handler) throws DBusException;
+    /**
+     * Adds a {@link DBusMatchRule} to with a generic signal handler.
+     * Generic signal handlers allow receiving different signals with the same handler.
+     * If the rule was already added, the signal handler is added to the internal map receiving
+     * the same signal as the first (and additional) handlers for this rule.
+     *
+     * @param _rule rule to add
+     * @param _handler handler to use
+     * @throws DBusException on error
+     */
+    protected abstract void addGenericSigHandler(DBusMatchRule _rule, DBusSigHandler<DBusSignal> _handler) throws DBusException;
 
+    /**
+     * The generated UUID of this machine.
+     * @return String
+     */
     public abstract String getMachineId();
 
     /**
@@ -181,24 +229,33 @@ public abstract class AbstractConnection implements Closeable {
     /**
      * Change the number of worker threads to receive method calls and handle signals. Default is 4 threads
      *
-     * @param newcount
+     * @param _newPoolSize
      *            The new number of worker Threads to use.
      */
-    public void changeThreadCount(byte newcount) {
-        if (newcount != THREADCOUNT) {
-            List<Runnable> remainingTasks = workerThreadPool.shutdownNow(); // kill previous threadpool
-            workerThreadPool =
-                    Executors.newFixedThreadPool(newcount, new NameableThreadFactory("DbusWorkerThreads", false));
-            // re-schedule previously waiting tasks
-            for (Runnable runnable : remainingTasks) {
-                workerThreadPool.execute(runnable);
+    public void changeThreadCount(byte _newPoolSize) {
+        if (workerThreadPool.getMaximumPoolSize() != _newPoolSize) {
+            workerThreadPoolLock.writeLock().lock();
+            try {
+                List<Runnable> remainingTasks = workerThreadPool.shutdownNow(); // kill previous threadpool
+                workerThreadPool = (ThreadPoolExecutor) Executors.newFixedThreadPool(_newPoolSize,
+                    new NameableThreadFactory("DbusWorkerThreads", false));
+                // re-schedule previously waiting tasks
+                for (Runnable runnable : remainingTasks) {
+                    workerThreadPool.execute(runnable);
+                }
+            } finally {
+                workerThreadPoolLock.writeLock().unlock();
             }
+
         }
     }
 
     public String getExportedObject(DBusInterface _interface) throws DBusException {
 
-        Optional<Entry<String, ExportedObject>> foundInterface = getExportedObjects().entrySet().stream().filter(e -> _interface.equals(e.getValue().getObject().get())).findFirst();
+        Optional<Entry<String, ExportedObject>> foundInterface =
+        		getExportedObjects().entrySet().stream()
+        			.filter(e -> _interface.equals(e.getValue().getObject().get()))
+        			.findFirst();
         if (foundInterface.isPresent()) {
             return foundInterface.get().getKey();
         } else {
@@ -243,7 +300,7 @@ public abstract class AbstractConnection implements Closeable {
         if (null == objectpath || "".equals(objectpath)) {
             throw new DBusException("Must Specify an Object Path");
         }
-        if (!objectpath.matches(OBJECT_REGEX) || objectpath.length() > MAX_NAME_LENGTH) {
+        if (objectpath.length() > MAX_NAME_LENGTH || !(OBJECT_REGEX_PATTERN.matcher(objectpath).matches())) {
             throw new DBusException("Invalid object path: " + objectpath);
         }
         synchronized (getExportedObjects()) {
@@ -262,45 +319,45 @@ public abstract class AbstractConnection implements Closeable {
      * Export an object as a fallback object. This object will have it's methods invoked for all paths starting with
      * this object path.
      *
-     * @param objectprefix
+     * @param _objectPrefix
      *            The path below which the fallback handles calls. MUST be in slash-notation, like
      *            "/org/freedesktop/Local",
-     * @param object
+     * @param _object
      *            The object to export.
      * @throws DBusException
      *             If the objectpath is incorrectly formatted,
      */
-    public void addFallback(String objectprefix, DBusInterface object) throws DBusException {
-        if (null == objectprefix || "".equals(objectprefix)) {
+    public void addFallback(String _objectPrefix, DBusInterface _object) throws DBusException {
+        if (null == _objectPrefix || "".equals(_objectPrefix)) {
             throw new DBusException("Must Specify an Object Path");
         }
-        if (!objectprefix.matches(OBJECT_REGEX) || objectprefix.length() > MAX_NAME_LENGTH) {
-            throw new DBusException("Invalid object path: " + objectprefix);
+        if (_objectPrefix.length() > MAX_NAME_LENGTH || !OBJECT_REGEX_PATTERN.matcher(_objectPrefix).matches()) {
+            throw new DBusException("Invalid object path: " + _objectPrefix);
         }
-        ExportedObject eo = new ExportedObject(object, weakreferences);
-        fallbackContainer.add(objectprefix, eo);
+        ExportedObject eo = new ExportedObject(_object, weakreferences);
+        fallbackContainer.add(_objectPrefix, eo);
     }
 
     /**
      * Remove a fallback
      *
-     * @param objectprefix
+     * @param _objectprefix
      *            The prefix to remove the fallback for.
      */
-    public void removeFallback(String objectprefix) {
-        fallbackContainer.remove(objectprefix);
+    public void removeFallback(String _objectprefix) {
+        fallbackContainer.remove(_objectprefix);
     }
 
     /**
      * Stop Exporting an object
      *
-     * @param objectpath
+     * @param _objectpath
      *            The objectpath to stop exporting.
      */
-    public void unExportObject(String objectpath) {
+    public void unExportObject(String _objectpath) {
         synchronized (getExportedObjects()) {
-            getExportedObjects().remove(objectpath);
-            getObjectTree().remove(objectpath);
+            getExportedObjects().remove(_objectpath);
+            getObjectTree().remove(_objectpath);
         }
     }
 
@@ -363,7 +420,7 @@ public abstract class AbstractConnection implements Closeable {
             throw new ClassCastException("Not A DBus Signal");
         }
         String objectpath = getImportedObjects().get(object).getObjectPath();
-        if (!objectpath.matches(OBJECT_REGEX) || objectpath.length() > MAX_NAME_LENGTH) {
+        if (objectpath.length() > MAX_NAME_LENGTH || !OBJECT_REGEX_PATTERN.matcher(objectpath).matches()) {
             throw new DBusException("Invalid object path: " + objectpath);
         }
         removeSigHandler(new DBusMatchRule(type, null, objectpath), handler);
@@ -418,7 +475,7 @@ public abstract class AbstractConnection implements Closeable {
             throw new DBusException("Not an object exported or imported by this connection");
         }
         String objectpath = rObj.getObjectPath();
-        if (!objectpath.matches(OBJECT_REGEX) || objectpath.length() > MAX_NAME_LENGTH) {
+        if (objectpath.length() > MAX_NAME_LENGTH || !OBJECT_REGEX_PATTERN.matcher(objectpath).matches()) {
             throw new DBusException("Invalid object path: " + objectpath);
         }
         addSigHandler(new DBusMatchRule(type, null, objectpath), handler);
@@ -429,9 +486,9 @@ public abstract class AbstractConnection implements Closeable {
         DBusMatchRule rule = new DBusMatchRule(signal);
         SignalTuple key = new SignalTuple(rule.getInterface(), rule.getMember(), rule.getObject(), rule.getSource());
         synchronized (getHandledSignals()) {
-            List<DBusSigHandler<? extends DBusSignal>> v = getHandledSignals().get(key);
+            Queue<DBusSigHandler<? extends DBusSignal>> v = getHandledSignals().get(key);
             if (null == v) {
-                v = new ArrayList<>();
+                v = new ConcurrentLinkedQueue<>();
                 v.add(handler);
                 getHandledSignals().put(key, v);
             } else {
@@ -441,13 +498,36 @@ public abstract class AbstractConnection implements Closeable {
     }
 
     /**
-     * Disconnect from the Bus.
+     * Special disconnect method which may be used whenever some cleanup before or after
+     * disconnection to DBus is required.
+     * @param _before action execute before actual disconnect, null if not needed
+     * @param _after action execute after disconnect, null if not needed
      */
-    public synchronized void disconnect() {
+    protected synchronized void disconnect(IDisconnectAction _before, IDisconnectAction _after) {
+        if (_before != null) {
+            _before.perform();
+        }
+        internalDisconnect();
+        if (_after != null) {
+            _after.perform();
+        }
+    }
+
+    /**
+     * Disconnects the DBus session.
+     * This method is private as it should never be overwritten by subclasses,
+     * otherwise we have an endless recursion when using {@link #disconnect(IDisconnectAction, IDisconnectAction)}
+     * which then will cause a StackOverflowError.
+     */
+    private synchronized void internalDisconnect() {
 
         if (connected == false) { // already disconnected
+            logger.debug("Ignoring disconnect, already disconnected");
             return;
         }
+
+        // stop the main thread
+        connected = false;
 
         logger.debug("Sending disconnected signal");
         try {
@@ -456,9 +536,13 @@ public abstract class AbstractConnection implements Closeable {
             logger.debug("Exception while disconnecting", ex);
         }
 
-
         logger.debug("Disconnecting Abstract Connection");
 
+        // stop reading new messages
+        readerThread.terminate();
+
+        // terminate the signal handling pool
+        workerThreadPoolLock.writeLock().lock();
         try {
             // try to wait for all pending tasks.
             workerThreadPool.shutdown();
@@ -466,18 +550,14 @@ public abstract class AbstractConnection implements Closeable {
 
         } catch (InterruptedException _ex) {
             logger.error("Interrupted while waiting for worker threads to be terminated.", _ex);
+        } finally {
+            workerThreadPoolLock.writeLock().unlock();
         }
 
         // shutdown sender executor service, send all remaining messages in main thread
         for (Runnable runnable : senderService.shutdownNow()) {
-			runnable.run();
-		}
-
-        // stop the main thread
-        run = false;
-        connected = false;
-
-        readerThread.setTerminate(true);
+            runnable.run();
+        }
 
         // disconnect from the transport layer
         try {
@@ -490,10 +570,21 @@ public abstract class AbstractConnection implements Closeable {
         }
 
         // stop all the workers
-        if (!workerThreadPool.isTerminated()) { // try forceful shutdown
-            workerThreadPool.shutdownNow();
+        workerThreadPoolLock.writeLock().lock();
+        try {
+            if (!workerThreadPool.isTerminated()) { // try forceful shutdown
+                workerThreadPool.shutdownNow();
+            }
+        } finally {
+            workerThreadPoolLock.writeLock().unlock();
         }
+    }
 
+    /**
+     * Disconnect from the Bus.
+     */
+    public synchronized void disconnect() {
+        internalDisconnect();
     }
 
     /**
@@ -702,7 +793,7 @@ public abstract class AbstractConnection implements Closeable {
                 try {
                     Type[] ts = me.getGenericParameterTypes();
                     m.setArgs(Marshalling.deSerializeParameters(m.getParameters(), ts, conn));
-                    logger.trace("Deserialised {} to types {}", Arrays.deepToString(m.getParameters()), Arrays.deepToString(ts));
+                    logger.trace("Deserialised {} to types {}", LoggingHelper.arraysDeepString(logger.isTraceEnabled(), m.getParameters()), LoggingHelper.arraysDeepString(logger.isTraceEnabled(),ts));
                 } catch (Exception e) {
                     logger.debug("", e);
                     handleException(conn, m, new UnknownMethod("Failure in de-serializing message: " + e));
@@ -750,7 +841,7 @@ public abstract class AbstractConnection implements Closeable {
                 }
             }
         };
-        workerThreadPool.execute(r);
+        executeInWorkerThreadPool(r);
     }
 
     /**
@@ -763,50 +854,39 @@ public abstract class AbstractConnection implements Closeable {
             "unchecked"
     })
     private void handleMessage(final DBusSignal _signal, boolean _useThreadPool) {
-        logger.debug("Handling incoming signal: ", _signal);
+        logger.debug("Handling incoming signal: {}", _signal);
 
         List<DBusSigHandler<? extends DBusSignal>> handlers = new ArrayList<>();
         List<DBusSigHandler<DBusSignal>> genericHandlers = new ArrayList<>();
 
-        synchronized (getHandledSignals()) {
-            List<DBusSigHandler<? extends DBusSignal>> t;
-            t = getHandledSignals().get(new SignalTuple(_signal.getInterface(), _signal.getName(), null, null));
-            if (null != t) {
-                handlers.addAll(t);
+        Queue<DBusSigHandler<? extends DBusSignal>> t;
+        t = getHandledSignals().get(new SignalTuple(_signal.getInterface(), _signal.getName(), null, null));
+        if (null != t) {
+            handlers.addAll(t);
+        }
+        t = getHandledSignals().get(new SignalTuple(_signal.getInterface(), _signal.getName(), _signal.getPath(), null));
+        if (null != t) {
+            handlers.addAll(t);
+        }
+        t = getHandledSignals().get(new SignalTuple(_signal.getInterface(), _signal.getName(), null, _signal.getSource()));
+        if (null != t) {
+            handlers.addAll(t);
+        }
+        t = getHandledSignals().get(new SignalTuple(_signal.getInterface(), _signal.getName(), _signal.getPath(), _signal.getSource()));
+        if (null != t) {
+            handlers.addAll(t);
             }
-            t = getHandledSignals().get(new SignalTuple(_signal.getInterface(), _signal.getName(), _signal.getPath(), null));
-            if (null != t) {
-                handlers.addAll(t);
-            }
-            t = getHandledSignals().get(new SignalTuple(_signal.getInterface(), _signal.getName(), null, _signal.getSource()));
-            if (null != t) {
-                handlers.addAll(t);
-            }
-            t = getHandledSignals().get(new SignalTuple(_signal.getInterface(), _signal.getName(), _signal.getPath(), _signal.getSource()));
-            if (null != t) {
-                handlers.addAll(t);
+
+        Queue<DBusSigHandler<DBusSignal>> gt;
+        Set<SignalTuple> allTuples = SignalTuple.getAllPossibleTuples(_signal.getInterface(), _signal.getName(), _signal.getPath(), _signal.getSource());
+        for( SignalTuple tuple : allTuples ){
+           gt = getGenericHandledSignals().get(tuple);
+            if (null != gt) {
+                genericHandlers.addAll(gt);
             }
         }
-        synchronized (getGenericHandledSignals()) {
-            List<DBusSigHandler<DBusSignal>> t;
-            t = getGenericHandledSignals().get(new SignalTuple(_signal.getInterface(), _signal.getName(), null, null));
-            if (null != t) {
-                genericHandlers.addAll(t);
-            }
-            t = getGenericHandledSignals().get(new SignalTuple(_signal.getInterface(), _signal.getName(), _signal.getPath(), null));
-            if (null != t) {
-                genericHandlers.addAll(t);
-            }
-            t = getGenericHandledSignals().get(new SignalTuple(_signal.getInterface(), _signal.getName(), null, _signal.getSource()));
-            if (null != t) {
-                genericHandlers.addAll(t);
-            }
-            t = getGenericHandledSignals().get(new SignalTuple(_signal.getInterface(), _signal.getName(), _signal.getPath(), _signal.getSource()));
-            if (null != t) {
-                genericHandlers.addAll(t);
-            }
-        }
-        if (0 == handlers.size() && 0 == genericHandlers.size()) {
+
+        if (handlers.isEmpty() && genericHandlers.isEmpty()) {
             return;
         }
 
@@ -824,6 +904,9 @@ public abstract class AbstractConnection implements Closeable {
                         } else {
                             rs = _signal;
                         }
+                        if (rs == null) {
+                            return;
+                        }
                         ((DBusSigHandler<DBusSignal>) h).handle(rs);
                     } catch (DBusException _ex) {
                         logger.warn("Exception while running signal handler '{}' for signal '{}':", h, _signal, _ex);
@@ -833,7 +916,7 @@ public abstract class AbstractConnection implements Closeable {
                 }
             };
             if (_useThreadPool) {
-                workerThreadPool.execute(command);
+                executeInWorkerThreadPool(command);
             } else {
                 command.run();
             }
@@ -849,10 +932,19 @@ public abstract class AbstractConnection implements Closeable {
                 }
             };
             if (_useThreadPool) {
-                workerThreadPool.execute(command);
+                executeInWorkerThreadPool(command);
             } else {
                 command.run();
             }
+        }
+    }
+
+    private void executeInWorkerThreadPool(Runnable task) {
+        workerThreadPoolLock.readLock().lock();
+        try {
+            workerThreadPool.execute(task);
+        } finally {
+            workerThreadPoolLock.readLock().unlock();
         }
     }
 
@@ -894,7 +986,7 @@ public abstract class AbstractConnection implements Closeable {
                         }
                     }
                 };
-                workerThreadPool.execute(command);
+                executeInWorkerThreadPool(command);
             }
 
         } else {
@@ -953,15 +1045,16 @@ public abstract class AbstractConnection implements Closeable {
                         }
                     }
                 };
-                workerThreadPool.execute(r);
+                executeInWorkerThreadPool(r);
             }
 
-        } else
+        } else {
             try {
                 sendMessage(new Error(mr, new DBusExecutionException(
                         "Spurious reply. No message with the given serial id was awaiting a reply.")));
             } catch (DBusException exDe) {
             }
+        }
     }
 
     public void queueCallback(MethodCall _call, Method _method, CallbackHandler<?> _callback) {
@@ -1041,10 +1134,10 @@ public abstract class AbstractConnection implements Closeable {
         try {
             m = transport.readMessage();
         } catch (IOException exIo) {
-            if (!run && (exIo instanceof EOFException)) { // EOF is expected when connection is shutdown
+            if (!connected && (exIo instanceof EOFException)) { // EOF is expected when connection is shutdown
                 return null;
             }
-            if (run) {
+            if (connected) {
                 throw new FatalDBusException(exIo.getMessage());
             } // if run is false, suppress all exceptions - the connection either is already disconnected or should be disconnected right now
         }
@@ -1098,11 +1191,11 @@ public abstract class AbstractConnection implements Closeable {
         return pendingErrorQueue;
     }
 
-    protected Map<SignalTuple, List<DBusSigHandler<? extends DBusSignal>>> getHandledSignals() {
+    protected Map<SignalTuple, Queue<DBusSigHandler<? extends DBusSignal>>> getHandledSignals() {
         return handledSignals;
     }
 
-    protected Map<SignalTuple, List<DBusSigHandler<DBusSignal>>> getGenericHandledSignals() {
+    protected Map<SignalTuple, Queue<DBusSigHandler<DBusSignal>>> getGenericHandledSignals() {
         return genericHandledSignals;
     }
 
@@ -1116,5 +1209,36 @@ public abstract class AbstractConnection implements Closeable {
 
     protected ObjectTree getObjectTree() {
         return objectTree;
+    }
+
+    /**
+     * Set the endianness to use for all connections.
+     * Defaults to the system architectures endianness.
+     *
+     * @param _b Message.Endian.BIG or Message.Endian.LITTLE
+     */
+    public static void setEndianness(byte _b) {
+        if (_b == Message.Endian.BIG || _b == Message.Endian.LITTLE) {
+            endianness = _b;
+        }
+    }
+
+    /**
+     * Get current endianness to use.
+     * @return Message.Endian.BIG or Message.Endian.LITTLE
+     */
+    public static byte getEndianness() {
+        return endianness;
+    }
+
+    /**
+     * Get the default system endianness.
+     *
+     * @return LITTLE or BIG
+     */
+    public static byte getSystemEndianness() {
+       return ByteOrder.nativeOrder().equals(ByteOrder.BIG_ENDIAN) ?
+                Message.Endian.BIG
+                : Message.Endian.LITTLE;
     }
 }

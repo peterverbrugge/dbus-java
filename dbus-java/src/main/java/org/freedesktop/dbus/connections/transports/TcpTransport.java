@@ -17,10 +17,18 @@ import org.freedesktop.dbus.connections.SASL;
 public class TcpTransport extends AbstractTransport {
 
     private Socket socket;
+    private final int        timeout;
+
     
     TcpTransport(BusAddress _address, int _timeout) {
-        super(_address, _timeout);
+        super(_address);
+        timeout = _timeout;
         setSaslAuthMode(SASL.AUTH_SHA);
+    }
+
+    @Override
+    boolean hasFileDescriptorSupport() {
+        return false; // file descriptor passing not possible on TCP connections
     }
 
     /**
@@ -36,13 +44,11 @@ public class TcpTransport extends AbstractTransport {
             }
         } else {
             socket = new Socket();
-            socket.connect(new InetSocketAddress(getAddress().getHost(), getAddress().getPort()));
+            getLogger().trace("Setting timeout to {} on Socket", timeout);
+            socket.connect(new InetSocketAddress(getAddress().getHost(), getAddress().getPort()), timeout);
         }
         
-        setInputReader(socket.getInputStream());
-        setOutputWriter(socket.getOutputStream());
-        getLogger().trace("Setting timeout to {} on Socket", getTimeout());
-        socket.setSoTimeout(getTimeout());
+        setInputOutput(socket);
 
         authenticate(socket.getOutputStream(), socket.getInputStream(), socket);
     }

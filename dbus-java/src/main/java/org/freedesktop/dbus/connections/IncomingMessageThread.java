@@ -11,7 +11,7 @@ import org.slf4j.LoggerFactory;
 public class IncomingMessageThread extends Thread {
     private final Logger             logger = LoggerFactory.getLogger(getClass());
 
-    private boolean                  terminate;
+    private volatile boolean         terminate;
     private final AbstractConnection connection;
 
     public IncomingMessageThread(AbstractConnection _connection) {
@@ -21,8 +21,8 @@ public class IncomingMessageThread extends Thread {
         setDaemon(true);
     }
 
-    public void setTerminate(boolean _terminate) {
-        terminate = _terminate;
+    public void terminate() {
+        terminate = true;
         interrupt();
     }
 
@@ -46,12 +46,17 @@ public class IncomingMessageThread extends Thread {
                 }
             } catch (DBusException _ex) {
                 if (_ex instanceof FatalException) {
+                    logger.error("FatalException in connection thread.", _ex);
                     if (connection.isConnected()) {
+                        terminate();
                         connection.disconnect();
-                        setTerminate(true);
                     }
+                    return;
                 }
-                logger.error("Exception in connection thread.", _ex);
+
+                if (!terminate) { // only log exceptions if the connection was not intended to be closed
+                    logger.error("Exception in connection thread.", _ex);
+                }
             }
         }
     }

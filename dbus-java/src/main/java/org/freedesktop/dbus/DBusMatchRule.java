@@ -12,8 +12,8 @@
 
 package org.freedesktop.dbus;
 
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.freedesktop.dbus.annotations.DBusInterfaceName;
 import org.freedesktop.dbus.annotations.DBusMemberName;
@@ -28,8 +28,8 @@ import org.freedesktop.dbus.messages.MethodCall;
 import org.freedesktop.dbus.messages.MethodReturn;
 
 public class DBusMatchRule {
-    private static final Map<String, Class<? extends DBusSignal>> SIGNALTYPEMAP = new HashMap<String, Class<? extends DBusSignal>>();
-    
+    private static final Map<String, Class<? extends DBusSignal>> SIGNALTYPEMAP = new ConcurrentHashMap<>();
+
     /* signal, error, method_call, method_reply */
     private String                                              type;
     private String                                              iface;

@@ -44,6 +44,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.slf4j.LoggerFactory;
 
 /**
  * 
@@ -73,23 +74,27 @@ class TestEmptyCollections {
 	private ISampleCollectionInterface clientObj;
 
 	@BeforeEach
-	public void setUp() throws DBusException {
-		serverconn = DBusConnection.getConnection(DBusBusType.SESSION);
-		clientconn = DBusConnection.getConnection(DBusBusType.SESSION);
-		serverconn.setWeakReferences(true);
-		clientconn.setWeakReferences(true);
+	public void setUp()  {
+		try {
+			serverconn = DBusConnection.getConnection(DBusBusType.SESSION);
+			clientconn = DBusConnection.getConnection(DBusBusType.SESSION);
+			serverconn.setWeakReferences(true);
+			clientconn.setWeakReferences(true);
 
-		/** This exports an instance of the test class as the object /Test. */
-		ISampleCollectionInterface serverImpl = new SampleCollectionImpl();
-		serverconn.exportObject(serverImpl.getObjectPath(), serverImpl);
+			/** This exports an instance of the test class as the object /Test. */
+			ISampleCollectionInterface serverImpl = new SampleCollectionImpl();
+			serverconn.exportObject(serverImpl.getObjectPath(), serverImpl);
 
-		clientObj = clientconn.getRemoteObject(serverconn.getUniqueName(), serverImpl.getObjectPath(),
-				ISampleCollectionInterface.class);
+			clientObj = clientconn.getRemoteObject(serverconn.getUniqueName(), serverImpl.getObjectPath(),
+					ISampleCollectionInterface.class);
+		} catch (DBusException _ex) {
+			LoggerFactory.getLogger(TestEmptyCollections.class).error("Failed to initiate dbus.", _ex);
+		}
 
 	}
 
 	@AfterEach
-	public void tearDown() {
+	public void tearDown() throws InterruptedException {
 		DBusExecutionException dbee = serverconn.getError();
 		if (null != dbee) {
 			throw dbee;
@@ -100,6 +105,9 @@ class TestEmptyCollections {
 		}
 		clientconn.disconnect();
 		serverconn.disconnect();
+		
+		// give the dbus daemon some time to unregister our calls before restarting test
+		Thread.sleep(800L);
 	}
 
 	/**
@@ -150,20 +158,20 @@ class TestEmptyCollections {
 		return Stream.of(
 				Arguments.of(new ArgumentObj<>(ISampleCollectionInterface::testListPrimitive,
 						s -> new ListStructPrimitive(Collections.emptyList(), s),
-						s -> new ListStructPrimitive(Arrays.asList(1, 2), s)), "ListPrimative", "1,2"),
+						s -> new ListStructPrimitive(Arrays.asList(1, 2), s)), "ListPrimitive", "1,2"),
 				Arguments.of(new ArgumentObj<>(ISampleCollectionInterface::testListIntStruct,
 						s -> new ListStructStruct(Collections.emptyList(), s),
 						s -> new ListStructStruct(Arrays.asList(new IntStruct(5, 6)), s)), "ListStruct", "(5,6)"),
 				Arguments.of(new ArgumentObj<>(ISampleCollectionInterface::testArrayPrimitive,
 						s -> new ArrayStructPrimitive(new int[0], s),
-						s -> new ArrayStructPrimitive(new int[] {4,5}, s)), "ArrayPrimative", "4,5"),
+						s -> new ArrayStructPrimitive(new int[] {4,5}, s)), "ArrayPrimitive", "4,5"),
 				Arguments.of(new ArgumentObj<>(ISampleCollectionInterface::testArrayIntStruct,
 						s -> new ArrayStructIntStruct(new IntStruct[0], s),
 						s -> new ArrayStructIntStruct(new IntStruct[] { new IntStruct(9, 12)}, s)),
 						"ArrayIntStruct", "(9,12)"),
 				Arguments.of(new ArgumentObj<>(ISampleCollectionInterface::testMapPrimitive,
 						s -> new MapStructPrimitive(Collections.emptyMap(), s),
-						s -> new MapStructPrimitive(getIntHashMap(), s)), "MapPrimative", "{test:8}"),
+						s -> new MapStructPrimitive(getIntHashMap(), s)), "MapPrimitive", "{test:8}"),
 				Arguments.of(new ArgumentObj<>(ISampleCollectionInterface::testMapIntStruct,
 						s -> new MapStructIntStruct(Collections.emptyMap(), s),
 						s -> new MapStructIntStruct(getIntStructHashMap(), s)), "MapIntStruct", "{other:(12,17)}"),

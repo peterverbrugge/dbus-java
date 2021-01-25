@@ -34,8 +34,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.freedesktop.DBus;
 import org.freedesktop.Hexdump;
 import org.freedesktop.dbus.Marshalling;
-import org.freedesktop.dbus.MessageReader;
-import org.freedesktop.dbus.MessageWriter;
 import org.freedesktop.dbus.connections.BusAddress;
 import org.freedesktop.dbus.connections.impl.DirectConnection;
 import org.freedesktop.dbus.connections.transports.TransportFactory;
@@ -50,6 +48,8 @@ import org.freedesktop.dbus.messages.DBusSignal;
 import org.freedesktop.dbus.messages.Message;
 import org.freedesktop.dbus.messages.MethodCall;
 import org.freedesktop.dbus.messages.MethodReturn;
+import org.freedesktop.dbus.spi.InputStreamMessageReader;
+import org.freedesktop.dbus.spi.OutputStreamMessageWriter;
 import org.freedesktop.dbus.types.UInt32;
 import org.freedesktop.dbus.types.Variant;
 import org.slf4j.Logger;
@@ -69,21 +69,21 @@ public class DBusDaemon extends Thread implements Closeable {
         // CHECKSTYLE:OFF
         public UnixSocket    usock;
         public Socket        tsock;
-        public MessageReader min;
-        public MessageWriter mout;
+        public InputStreamMessageReader min;
+        public OutputStreamMessageWriter mout;
         public String        unique;
         // CHECKSTYLE:ON
 
         Connstruct(UnixSocket sock) throws IOException {
             this.usock = sock;
-            min = new MessageReader(sock.getInputStream());
-            mout = new MessageWriter(sock.getOutputStream());
+            min = new InputStreamMessageReader(sock.getInputStream());
+            mout = new OutputStreamMessageWriter(sock.getOutputStream());
         }
 
         Connstruct(Socket sock) throws IOException {
             this.tsock = sock;
-            min = new MessageReader(sock.getInputStream());
-            mout = new MessageWriter(sock.getOutputStream());
+            min = new InputStreamMessageReader(sock.getInputStream());
+            mout = new OutputStreamMessageWriter(sock.getOutputStream());
         }
 
         @Override
@@ -192,7 +192,7 @@ public class DBusDaemon extends Thread implements Closeable {
                 names.put(c.unique, c);
             }
 
-            LOGGER.warn("Client {} registered", c.unique);
+            LOGGER.info("Client {} registered", c.unique);
 
             try {
                 send(c, new DBusSignal("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameAcquired", "s", c.unique));
@@ -285,7 +285,7 @@ public class DBusDaemon extends Thread implements Closeable {
                 rv = DBus.DBUS_REQUEST_NAME_REPLY_EXISTS;
             } else {
 
-                LOGGER.warn("Client {} acquired name {}", c.unique, name);
+                LOGGER.info("Client {} acquired name {}", c.unique, name);
 
                 rv = DBus.DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER;
                 try {
@@ -316,7 +316,7 @@ public class DBusDaemon extends Thread implements Closeable {
             if (!exists) {
                 rv = DBus.DBUS_RELEASE_NAME_REPLY_NON_EXISTANT;
             } else {
-                LOGGER.warn("Client {} acquired name {}", c.unique, name);
+                LOGGER.info("Client {} acquired name {}", c.unique, name);
                 rv = DBus.DBUS_RELEASE_NAME_REPLY_RELEASED;
                 try {
                     send(c, new DBusSignal("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameLost", "s", name));
@@ -954,7 +954,7 @@ public class DBusDaemon extends Thread implements Closeable {
         }
 
         // start the daemon
-        LOGGER.warn("Binding to {}", addr);
+        LOGGER.info("Binding to {}", addr);
         try (EmbeddedDBusDaemon daemon = new EmbeddedDBusDaemon()) {
 	        daemon.setAddress(address);
 	        daemon.startInForeground();

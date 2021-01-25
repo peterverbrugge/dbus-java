@@ -6,7 +6,7 @@
 
     <groupId>com.github.hypfvieh</groupId>
     <artifactId>dbus-java-parent</artifactId>
-    <version>3.2.0-SNAPSHOT</version>
+    <version>3.2.4</version>
 
     <name>${project.artifactId}</name>
     <url>https://github.com/hypfvieh/${project.artifactId}</url>
@@ -17,10 +17,12 @@
         <maven.compiler.source>1.8</maven.compiler.source>
         <maven.compiler.target>1.8</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <junit5.version>5.7.0</junit5.version>
     </properties>
 
     <modules>
         <module>dbus-java</module>
+        <module>dbus-java-osgi</module>
         <module>dbus-java-utils</module>
     </modules>
 
@@ -31,7 +33,60 @@
                 <artifactId>maven-deploy-plugin</artifactId>
                 <version>3.0.0-M1</version>
             </plugin>
-                
+            
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>3.0.0-M2</version>
+                <executions>
+                    <execution>
+                        <id>enforce-maven</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireMavenVersion>
+                                    <version>3.5.0</version>
+                                </requireMavenVersion>
+                                <requireJavaVersion>
+                                    <version>${maven.compiler.source}</version>
+                                </requireJavaVersion>
+                                <requireOS>
+                                    <family>unix</family>
+                                </requireOS>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>animal-sniffer-maven-plugin</artifactId>
+                <version>1.18</version>
+                <configuration>
+                    <signature>
+                        <groupId>org.codehaus.mojo.signature</groupId>
+                        <artifactId>java18</artifactId>
+                        <version>1.0</version>
+                    </signature>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>sniffer_check</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-site-plugin</artifactId>
+                <version>3.9.0</version>
+            </plugin>
         </plugins>
 
         <pluginManagement>
@@ -41,7 +96,41 @@
                     <artifactId>versions-maven-plugin</artifactId>
                     <version>2.7</version>
                 </plugin>
+                
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>3.1.2</version>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>test-jar</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                    <configuration>
+                        <archive>
+                            <manifest>
+                                <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+                            </manifest>
+                        </archive>
+                    </configuration>
+                </plugin>
+                
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.0.0-M3</version>
+                    <configuration>
+                        <forkCount>1</forkCount>
+                        <reuseForks>false</reuseForks>
+                        <systemPropertyVariables>
+                            <logback.configurationFile>${basedir}/src/test/resources/logback.xml</logback.configurationFile>
+                        </systemPropertyVariables>
+                    </configuration>
+                </plugin>
             </plugins>
+            
         </pluginManagement>
 
     </build>
@@ -62,7 +151,7 @@
             <dependency>
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
-                <version>1.7.25</version>
+                <version>1.7.30</version>
             </dependency>
 
             <dependency>
@@ -81,35 +170,42 @@
             <dependency>
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter-api</artifactId>
-                <version>5.4.0-M1</version>
+                <version>${junit5.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter-params</artifactId>
-                <version>5.4.0-M1</version>
+                <version>${junit5.version}</version>
             </dependency>
 
             <!-- needed for IDE support -->
             <dependency>
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter-engine</artifactId>
-                <version>5.4.0-M1</version>
+                <version>${junit5.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>org.junit.platform</groupId>
                 <artifactId>junit-platform-launcher</artifactId>
-                <version>1.4.0-M1</version>
+                <version>1.7.0</version>
+            </dependency>
+            
+            <!-- Base dependencies for submodules -->
+            <dependency>
+                <groupId>com.github.hypfvieh</groupId>
+                <artifactId>java-utils</artifactId>
+                <version>1.0.6</version>
+            </dependency>
+            
+            <dependency>
+                <groupId>com.github.jnr</groupId>
+                <artifactId>jnr-unixsocket</artifactId>
+                <version>0.33</version>
             </dependency>
 
-            <!-- Mockito mocking framework. -->
-            <dependency>
-                <groupId>org.mockito</groupId>
-                <artifactId>mockito-core</artifactId>
-                <version>2.23.4</version>
-            </dependency>
-        </dependencies>
+        </dependencies>        
     </dependencyManagement>
 
     <dependencies>
@@ -144,19 +240,13 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- Mockito mocking framework. -->
-        <dependency>
-            <groupId>org.mockito</groupId>
-            <artifactId>mockito-core</artifactId>
-            <scope>test</scope>
-        </dependency>
     </dependencies>
 
     <scm>
         <connection>scm:git:https://github.com/hypfvieh/dbus-java.git</connection>
         <developerConnection>scm:git:https://github.com/hypfvieh/dbus-java.git</developerConnection>
         <url>https://github.com/hypfvieh/dbus-java.git</url>
-      <tag>HEAD</tag>
+      <tag>dbus-java-parent-3.2.4</tag>
   </scm>
 
     <licenses>
@@ -243,7 +333,7 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-source-plugin</artifactId>
-                        <version>3.0.1</version>
+                        <version>3.1.0</version>
                         <executions>
                             <execution>
                                 <id>attach-sources</id>
@@ -256,7 +346,7 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-javadoc-plugin</artifactId>
-                        <version>3.0.1</version>
+                        <version>3.1.0</version>
                         <configuration>
                             <additionalparam>-Xdoclint:none</additionalparam>
                         </configuration>
